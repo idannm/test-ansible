@@ -1,0 +1,52 @@
+---
+- name: Setup
+  hosts: all
+  become: yes
+  tasks:
+    - name: Set server name fact from AWS tags
+      set_fact:
+        instance_name: "{{ tags.Name | default('web-server') }}"
+
+    - name: Set Hostname
+      hostname:
+        name: "{{ instance_name }}"
+
+    - name: Ensure cronie is installed
+      dnf:
+        name: cronie
+        state: present
+
+    - name: Install and Start MySQL
+      block:
+        - name: Install MariaDB
+          dnf:
+            name: "mariadb105-server"
+            state: present
+        - name: Start and Enable MariaDB
+          service:
+            name: mariadb
+            state: started
+            enabled: yes
+      when: "'service_mysql' in group_names"
+
+    - name: Install and Start Nginx
+      block:
+        - name: Install Nginx
+          dnf:
+            name: "nginx"
+            state: present
+        - name: Start and Enable Nginx
+          service:
+            name: nginx
+            state: started
+            enabled: yes
+      when: "'service_nginx' in group_names"
+
+    - name: Set up scheduled restart
+      cron:
+        name: "Scheduled Reboot"
+        weekday: "{{ '0' if 'Sunday' in (tags.Restart | default('')) else '6' if 'Saturday' in (tags.Restart | default('')) else '*' }}"
+        hour: "{{ '6' if '6:00' in (tags.Restart | default('')) else '0' if 'midnight' in (tags.Restart | default('')) else '*' }}"
+        minute: "0"
+        job: "/sbin/reboot"
+      when: tags.Restart is defined
