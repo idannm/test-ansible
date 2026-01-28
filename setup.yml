@@ -1,52 +1,67 @@
 ---
-- name: Setup
+- name: Generic System Setup
   hosts: all
   become: yes
+  vars:
+    # מיפוי השירותים והחבילות
+    app_map:
+      service_mysql:
+        package: "mariadb105-server"
+        service: "mariadb"
+      service_nginx:
+        package: "nginx"
+        service: "nginx"
+
   tasks:
-    - name: Set server name fact from AWS tags
+    - name: Set server name fact
       set_fact:
         instance_name: "{{ tags.Name | default('web-server') }}"
 
-    - name: Set Hostname
+    - name: Update Hostname
       hostname:
         name: "{{ instance_name }}"
 
-    - name: Ensure cronie is installed
+    - name: Install Cron service
       dnf:
         name: cronie
         state: present
 
-    - name: Install and Start MySQL
-      block:
-        - name: Install MariaDB
-          dnf:
-            name: "mariadb105-server"
-            state: present
-        - name: Start and Enable MariaDB
-          service:
-            name: mariadb
-            state: started
-            enabled: yes
-      when: "'service_mysql' in group_names"
+    - name: Install Application Packages
+      dnf:
+        name: "{{ app_map[item].package }}"
+        state: present
+      loop: "{{ app_map.keys() | list }}"
+      when: item in group_names
 
-    - name: Install and Start Nginx
-      block:
-        - name: Install Nginx
-          dnf:
-            name: "nginx"
-            state: present
-        - name: Start and Enable Nginx
-          service:
-            name: nginx
-            state: started
-            enabled: yes
-      when: "'service_nginx' in group_names"
+    - name: Start and Enable Application Services
+      service:
+        name: "{{ app_map[item].service }}"
+        state: started
+        enabled: yes
+      loop: "{{ app_map.keys() | list }}"
+      when: item in group_names
 
-    - name: Set up scheduled restart
+    # הגדרת ריסטרט - שימוש בטווח מספרים ובלוגיקת IF מפורשת
+    - name: Configure daily restart from tags
       cron:
-        name: "Scheduled Reboot"
-        weekday: "{{ '0' if 'Sunday' in (tags.Restart | default('')) else '6' if 'Saturday' in (tags.Restart | default('')) else '*' }}"
-        hour: "{{ '6' if '6:00' in (tags.Restart | default('')) else '0' if 'midnight' in (tags.Restart | default('')) else '*' }}"
+        name: "Scheduled Daily Reboot"
+        # שינוי: שימוש ב-If/Else כדי לקבוע את היום כמספר (0-6)
+        # אם כתוב יום ספציפי - הוא יבחר אותו. אם לא מצא - הוא יגדיר טווח 0-6 (כל השבוע)
+        weekday: >-
+          {% if 'Sunday' in tags.Restart %}0
+          {% elif 'Monday' in tags.Restart %}1
+          {% elif 'Tuesday' in tags.Restart %}2
+          {% elif 'Wednesday' in tags.Restart %}3
+          {% elif 'Thursday' in tags.Restart %}4
+          {% elif 'Friday' in tags.Restart %}5
+          {% elif 'Saturday' in tags.Restart %}6
+          {% else %}0-6
+          {% endif %}
+        # הגדרת השעה (6 בבוקר או חצות)
+        hour: >-
+          {% if '6:00' in tags.Restart %}6
+          {% elif 'midnight' in tags.Restart %}0
+          {% else %}0
+          {% endif %}
         minute: "0"
         job: "/sbin/reboot"
-      when: tags.Restart is defined
